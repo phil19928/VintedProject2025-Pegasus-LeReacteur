@@ -45,6 +45,7 @@ router.post(
           },
         ],
         owner: req.user._id,
+        product_pictures: [],
       });
 
       const imagetoBase64 = convertToBase64(req.files.picture);
@@ -55,6 +56,26 @@ router.post(
       });
 
       newOffer.product_image = uploadedImage;
+
+      const galleryFiles = req.files?.pictures;
+      const filesToUpload = Array.isArray(galleryFiles)
+        ? galleryFiles
+        : galleryFiles
+        ? [galleryFiles]
+        : [];
+
+      for (let index = 0; index < filesToUpload.length; index++) {
+        const file = filesToUpload[index];
+        const uploadedGalleryImage = await cloudinary.uploader.upload(
+          convertToBase64(file),
+          {
+            folder: `vinted/offers/${newOffer._id}`,
+            public_id: `gallery_${Date.now()}_${index}`,
+          }
+        );
+        newOffer.product_pictures.push(uploadedGalleryImage);
+      }
+
       await newOffer.save();
 
       res.status(201).json({
@@ -72,6 +93,7 @@ router.post(
         },
         owner_id: req.user._id,
         product_image: newOffer.product_image,
+        product_pictures: newOffer.product_pictures,
       });
     } catch (error) {
       res.status(500).json({ message: error.message });
@@ -112,7 +134,7 @@ router.get("/offers", async (req, res) => {
 
     const offers = await Offer.find(filters)
       .select(
-        "product_details product_image _id product_name product_description product_price owner"
+        "product_details product_image product_pictures _id product_name product_description product_price owner"
       )
       .populate("owner", "account.username account.avatar.secure_url")
       .sort(sortObj)
@@ -205,6 +227,27 @@ router.put("/offer/:id", isAuthenticated, fileUpload(), async (req, res) => {
       updatedOffer.product_image = uploadedImage;
     }
 
+    if (req.files && req.files.pictures) {
+      if (!Array.isArray(updatedOffer.product_pictures)) {
+        updatedOffer.product_pictures = [];
+      }
+      const galleryFiles = Array.isArray(req.files.pictures)
+        ? req.files.pictures
+        : [req.files.pictures];
+
+      for (let index = 0; index < galleryFiles.length; index++) {
+        const file = galleryFiles[index];
+        const uploadedGalleryImage = await cloudinary.uploader.upload(
+          convertToBase64(file),
+          {
+            folder: `vinted/offers/${updatedOffer._id}`,
+            public_id: `gallery_${Date.now()}_${index}`,
+          }
+        );
+        updatedOffer.product_pictures.push(uploadedGalleryImage);
+      }
+    }
+
     await updatedOffer.save();
 
     res.status(200).json({
@@ -222,6 +265,7 @@ router.put("/offer/:id", isAuthenticated, fileUpload(), async (req, res) => {
       },
       owner_id: req.user._id,
       product_image: updatedOffer.product_image,
+      product_pictures: updatedOffer.product_pictures,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -245,6 +289,19 @@ router.delete("/offer/:id", isAuthenticated, async (req, res) => {
       await cloudinary.uploader.destroy(offer.product_image.public_id, {
         invalidate: true,
       });
+    }
+
+    if (Array.isArray(offer.product_pictures) && offer.product_pictures.length > 0) {
+      const galleryToDelete = offer.product_pictures
+        .filter((picture) => picture && picture.public_id)
+        .map((picture) =>
+          cloudinary.uploader.destroy(picture.public_id, {
+            invalidate: true,
+          })
+        );
+      if (galleryToDelete.length > 0) {
+        await Promise.all(galleryToDelete);
+      }
     }
 
     await offer.deleteOne();
